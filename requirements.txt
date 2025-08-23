@@ -1,0 +1,20 @@
+ipython
+scikit-learn
+joblib
+pytest
+numpy
+pandas
+matplotlib
+dvc
+feast
+dvc[gs]
+black
+flake8
+mlflow
+google-cloud-aiplatform
+google-cloud-storage
+dvc
+# Responsible AI & Monitoring
+shap
+fairlearn
+evidently
