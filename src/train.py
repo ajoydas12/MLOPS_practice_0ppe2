@@ -68,5 +68,5 @@ def train_model(data_path='data/transactions.csv'):
 if __name__ == "__main__":
     # Make sure your MLflow server is running and accessible
     # Replace with your server's IP address
-    mlflow.set_tracking_uri("http://35.223.196.178/:5000") #<-- Example IP
+    mlflow.set_tracking_uri("http://34.45.152.237:5000") #<-- Example IP
     train_model()
