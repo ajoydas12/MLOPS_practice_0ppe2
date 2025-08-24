@@ -35,9 +35,10 @@ def train_model(data_path='data/transactions.csv'):
     with mlflow.start_run() as run:
         # Load data
         df = pd.read_csv(data_path)
+        # print(df.head())
 
         # --- Drop non-numeric / unnecessary columns ---
-        drop_cols = ['Class', 'Time', 'Location']  # <-- Added Location here
+        drop_cols = ['Class', 'Time', 'location']  # <-- Added Location here
         X = df.drop(columns=drop_cols, errors='ignore')
         y = df['Class']
 
