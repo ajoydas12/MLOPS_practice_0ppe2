@@ -1,0 +1,143 @@
+name: MLOps Pipeline for Fraud Detection
+
+
+on:
+  push:
+    branches: [ main ]
+
+
+permissions:
+  pull-requests: write
+  contents: read
+
+
+jobs:
+  build-and-validate:
+    runs-on: ubuntu-latest
+
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+
+      - name: Set up GCP credentials and authenticate
+        env:
+          GCP_B64: ${{ secrets.GCP_CREDENTIALS_B64 }}
+        run: |
+          set -e
+          echo "$GCP_B64" | base64 -d > gcp-key.json
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/gcp-key.json" >> $GITHUB_ENV
+          export GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/gcp-key.json
+         
+          echo "✓ Decoded service account key"
+          python3 -m json.tool gcp-key.json > /dev/null && echo "✓ Valid JSON"
+         
+          echo "Installing Google Cloud CLI..."
+          sudo apt-get update && sudo apt-get install -y google-cloud-cli
+         
+          echo "Authenticating with GCP..."
+          gcloud auth activate-service-account --key-file=gcp-key.json
+          gcloud config set project MLOPS
+         
+          echo "Running DVC pull in same session..."
+          source .venv/bin/activate
+         
+          export GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/gcp-key.json
+         
+          echo "Configuring DVC to use gcloud credentials..."
+          dvc remote modify gcsremote credentialpath $(pwd)/gcp-key.json
+         
+          echo "Running DVC pull:"
+          dvc pull -v
+
+
+      # --- PRE-TRAINING VALIDATION GATES ---
+      - name: Check for Data Poisoning
+        id: poison_check
+        run: |
+          source .venv/bin/activate
+          echo "## 🛡️ Data Poisoning Check" >> report.md
+          python src/check_poisoning.py --data-path data/transactions.csv >> report.md
+         
+          SUSPICIOUS_COUNT=$(grep "Found" report.md | awk '{print $3}')
+          echo "Suspicious labels found: $SUSPICIOUS_COUNT"
+          echo "count=$SUSPICIOUS_COUNT" >> "$GITHUB_OUTPUT"
+
+
+      - name: Validate Data Quality
+        run: |
+          if [ "${{ steps.poison_check.outputs.count }}" -gt 100 ]; then
+            echo "❌ Error: High number of suspicious labels detected. Aborting."
+            exit 1
+          else
+            echo "✅ Data quality check passed."
+          fi
+
+
+      - name: Check for Data Drift
+        run: |
+          source .venv/bin/activate
+          echo "## 🌊 Data Drift Check" >> report.md
+          python src/check_drift.py >> report.md
+
+
+      # --- CORE MODELING PIPELINE ---
+      - name: Run Model Training
+        run: |
+          source .venv/bin/activate
+          python src/train.py
+
+
+      # --- POST-TRAINING RESPONSIBLE AI CHECKS ---
+      - name: Generate Model Explanations (SHAP)
+        run: |
+          source .venv/bin/activate
+          echo "## 🧠 Model Explainability (SHAP)" >> report.md
+          python src/generate_explanations.py >> report.md
+
+
+      - name: Check for Model Bias (Fairlearn)
+        run: |
+          source .venv/bin/activate
+          echo "## ⚖️ Model Fairness Check (Fairlearn)" >> report.md
+          python src/check_fairness.py >> report.md
+         
+      # --- REPORTING ---
+      - name: Upload All Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ml-artifacts
+          path: artifacts/
+
+
+      - name: Setup CML
+        uses: iterative/setup-cml@v2
+        env:
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
+      - name: Create CML Report on Pull Request
+        env:
+          # FIXED: Use the more powerful Personal Access Token
+          REPO_TOKEN: ${{ secrets.CML_REPO_TOKEN }}
+        run: |
+          echo "### SHAP Feature Importance" >> report.md
+          echo "![SHAP Summary](./artifacts/shap_summary.png)" >> report.md
+          cml comment create report.md
+
+
